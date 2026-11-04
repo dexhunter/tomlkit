@@ -313,14 +313,11 @@ class Parser:
                 self.mark()
                 self.inc()  # Skip #
 
-                # The comment itself
-                while not self.end() and self._current not in _NL:
-                    code = ord(self._current)
-                    if code == CHR_DEL or (code <= CTRL_CHAR_LIMIT and code != CTRL_I):
-                        raise self.parse_error(InvalidControlChar, code, "comments")
-
-                    if not self.inc():
-                        break
+                # Stop on a line ending or invalid control, leaving it unconsumed.
+                if self._src.advance_until(_CTRL_SINGLE) and self._current not in _NL:
+                    raise self.parse_error(
+                        InvalidControlChar, ord(self._current), "comments"
+                    )
 
                 comment = self.extract()
                 self.mark()
