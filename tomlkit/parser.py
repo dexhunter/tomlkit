@@ -632,22 +632,45 @@ class Parser:
 
     def _parse_array(self) -> Array:
         # Consume opening bracket, EOF here is an issue (middle of array)
-        self.inc(exception=UnexpectedEofError)
+        src = self._src
+        src.inc(exception=UnexpectedEofError)
+
+        whitespace = _WS
+        advance_whitespace = src.advance_while
+        parse_value = self._parse_value
 
         elems: list[Item] = []
         prev_value = None
         while True:
             # consume whitespace
-            mark = self._idx
-            self.consume(" \t\n\r")
-            indent = self._src[mark : self._idx]
-            newline = _NL & set(indent)
-            if newline:
-                elems.append(Whitespace(indent))
+            indent = ""
+            mark = None
+            c = src.current
+            if c in whitespace:
+                mark = src.idx
+                advance_whitespace(whitespace)
+                c = src.current
+
+            # Include a following comma in the whitespace slice.
+            if prev_value and c == ",":
+                src.inc(exception=UnexpectedEofError)
+                if mark is not None:
+                    elems.append(Whitespace(src[mark : src.idx]))
+                elif isinstance(elems[-1], Whitespace):
+                    elems[-1]._s = elems[-1].s + ","
+                else:
+                    elems.append(Whitespace(","))
+                prev_value = False
                 continue
 
+            if mark is not None:
+                indent = src[mark : src.idx]
+            if "\n" in indent or "\r" in indent:
+                elems.append(Whitespace(indent))
+                indent = ""
+
             # consume comment
-            if self._current == "#":
+            if c == "#":
                 cws, comment, trail = self._parse_comment_trail(parse_trail=False)
                 elems.append(Comment(Trivia(indent, cws, comment, trail)))
                 continue
@@ -655,7 +678,6 @@ class Parser:
             # consume indent
             if indent:
                 elems.append(Whitespace(indent))
-                continue
 
             # consume value
             # Skip the value attempt when sitting on the closing bracket: a
@@ -664,29 +686,18 @@ class Parser:
             # UnexpectedCharError immediately -- and building that discarded
             # exception eagerly computes a line/column, which scans the whole
             # source. On a large file with many arrays this is a big, pure waste.
-            if not prev_value and self._current != "]":
-                elems.append(self._parse_value())
+            if not prev_value and c != "]":
+                elems.append(parse_value())
                 prev_value = True
                 continue
 
-            # consume comma
-            if prev_value and self._current == ",":
-                self.inc(exception=UnexpectedEofError)
-                # If the previous item is Whitespace, add to it
-                if isinstance(elems[-1], Whitespace):
-                    elems[-1]._s = elems[-1].s + ","
-                else:
-                    elems.append(Whitespace(","))
-                prev_value = False
-                continue
-
             # consume closing bracket
-            if self._current == "]":
+            if c == "]":
                 # consume closing bracket, EOF here doesn't matter
-                self.inc()
+                src.inc()
                 break
 
-            raise self.parse_error(UnexpectedCharError, self._current)
+            raise self.parse_error(UnexpectedCharError, c)
 
         try:
             res = Array(elems, Trivia())
